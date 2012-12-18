@@ -12,7 +12,7 @@ PACKAGE_NAME='sched'
 
 
 local timer
-local os_time=os.clock
+local os_time
 
 local Cell={}
 local weak={__mode='kv'}
@@ -213,6 +213,23 @@ Obj.reset = function (obj)
 	return obj
 end
 
+Obj.setTimeout=function(obj,timeout)
+	obj.timeout=timeout
+	obj.td={timer={timeout+os_time()}}
+	obj:link(obj.td)
+end
+
+Obj.resetTimeout=function(obj)
+	Cell.uniset('timer',obj.td.timer[1],obj)
+	obj.td.timer[1]=os_time()+obj.timeout
+	Cell.uniset('timer',obj.td.timer[1],obj,true)
+end
+
+Obj.cancelTimeout=function(obj)
+	obj.timeout=nil
+	obj:unlink(obj.td)
+	obj.td=nil
+end
 
 
  --[[syncronous calls; are called as soon as the signal is received, but can't block
@@ -258,10 +275,8 @@ end
 
 local sync_on_handle=function(obj,...)
 	if obj.timeout then
-		Cell.uniset('timer',obj.nd,obj)
-		-- Timer.removetimer(obj.timer)
-		obj.nd=os_time()+obj.timeout
-		Cell.uniset('timeout',obj.nd,obj,true)
+		obj.f(...)
+		obj:resetTimeout()
 	end
 	obj.f(...)
 end
@@ -280,9 +295,7 @@ Sync.on = function (...)
 	sync.kill=sync_perm_kill
 	local t,timeout=get_args(select(name and 3 or 2,...))
 	if timeout then
-		sync.timeout=timeout
-		sync.nd=os_time()+timeout
-		t=add_timer(t,sync.nd)
+		sync:setTimeout(timeout)
 	end
 	sync:link(t)
 	log('sched', 'DETAIL', 'created Sync.on %s from %s with signal descriptor %s', tostring(sync), tostring(f),sprint(...))
@@ -394,8 +407,8 @@ Task.wait= function(...)
 	elseif ... then --only set new cells if necessary;
 		log('sched', 'DETAIL', "%s waiting with args %s", tostring(task),sprint(...))
 		local t,timeout=get_args(...)
-		if timeout then nd=timeout+os_time() end
-		task:link(add_timer(t,nd))
+		if timeout then task:setTimeout(timeout) end
+		if t then task:link(t) end
 	else
 		log('sched', 'DETAIL', "%s waiting for pre-set signals", tostring(task),sprint(...))
 	end
@@ -620,9 +633,11 @@ end
 }
 local renv=setmetatable({sched=sched},{__index=_G})
 local platform=require('platform',nil,nil,renv)
-Timer=require('timer',nil,nil,renv)
+os_time=platform.time
 
-sched.timer=Timer
+local Timer=require('timer',nil,nil,renv)
+
+sched.Timer=Timer
 sched.platform=platform
 
 local loop_state = 'stopped' -- stopped, running or stopping
@@ -638,7 +653,8 @@ function sched.reset()
 	tnil(cells)
 	Timer._reset()
 	Task._reset()
-	platform._reset()
+	
+	platform._reset() --after Timer
 	loop_state = 'stopped'
 	log('sched','INFO','scheduler cleaned.')
 end
@@ -651,35 +667,26 @@ function sched.loop ()
     loop_state = 'running'
 	local Task=Task
 	local cells=cells
-    local timer_nextevent, timer_step, Task_step, platform_step, os_time =
-        Timer.nextevent, Timer.step, Task.step, platform.step, platform.time
+    local Timer_nextevent, Timer_step, Task_step, platform_step =
+        Timer.nextevent, Timer.step, Task.step, platform.step
 		
     while true do
-		
 		--this block is a scheduler cycle
-        timer_step() -- Emit timer signals
+        Timer_step() -- Emit timer signals
         Task_step() -- Run all the ready tasks
 
         -- Find out when the next timer event is due
         local timeout = nil
-        do
-            local date = timer_nextevent()
-            if date then
-                local now=os_time()
-                timeout = date<now and 0 or date-now 
-            end
-        end
-		if Task.ready.r[0] then
-			timeout=0
-		else
-			if (not cells.platform) then
-				log('sched','INFO','No-one ready to run or listening for signal emitter platform')
-				sched.stop()
-			end
+		
+		local date = Timer_nextevent()
+		if date then
+			local now=os_time()
+			timeout = date<now and 0 or date-now 
 		end
+		
 		if loop_state~='running' then sched.reset() break end
 		-- if loop_state~='running' then break end
-		platform_step (timeout) -- Wait for platform events until the next timer is due
+		platform_step (timeout,date) -- Wait for platform events until the next timer is due
     end
 end
 sched.reset()

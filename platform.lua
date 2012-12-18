@@ -9,8 +9,10 @@ PACKAGE_NAME='sched'
 local os_pullEventRaw=os.pullEventRaw
 local sched=sched
 local cells
+local link_r
 function _reset()
 	cells=sched.cells
+	link_r=sched.Timer.link.r
 end
 env=getfenv()
 setmetatable(env,nil)
@@ -178,11 +180,14 @@ for t,tf in pairs(new) do
 end
 
 
-time=os.clock
+local time=os.clock
+env.time = time
 
-function step(timeout)
+local Task=sched.Task
+function step(timeout,nd)
 	log("platform", "DEBUG", timeout and 'timeout is '..timeout or 'no timeout')
-	local tr=sched.Task.ready.r
+	local tr=Task.ready.r
+	if tr[0]~=-1 then timeout=0 end
 	if timeout then
 		local id=os.startTimer(timeout)
 		local x
@@ -194,7 +199,9 @@ function step(timeout)
 					break
 				else
 					sched.signal('platform',unpack(x))
-					if tr[0] then break end
+					-- print(sched.Timer.link)
+					-- print(link_r[0],nd)
+					if tr[0]~=-1 or link_r[0]~=nd then break end
 				end
 			until false
 		else
@@ -204,6 +211,7 @@ function step(timeout)
 	else
 		sched.signal('platform',os_pullEventRaw())
 	end
+	log("platform", "DEBUG",'leaving')
 end
 
 return env

@@ -12,6 +12,9 @@ local pprint=pprint
 local print=print
 PACKAGE_NAME='sched'
 
+
+local linked=require'utils.linked'
+
 local sched=sched
 local cells=sched.cells
 local os = os
@@ -29,6 +32,8 @@ local rawset=rawset
 env=getfenv()
 setmetatable(env,nil)
 
+
+local Timer={}
 -------------------------------------------------------------------------------------
 -- Common scheduling code
 -------------------------------------------------------------------------------------
@@ -41,21 +46,30 @@ local function stimer_nextevent (timer) return nil end
 
 local Cell
 local events
-local array
+local link,link_r
 local n
 -------------------------------------------------------------------------------------
--- Take a timer, reference it properly in `events` table
+-- Take a timer, reference it
 -------------------------------------------------------------------------------------
-local Timer={}
-Timer.add = function(nd)
-	if not events[nd] then
-		--insert nd in the right place
-		local n = n+1
-		for i = 1, n-1 do
-			if array[i] > nd then n = i break end
+
+Timer.add = function(t)
+	if not link_r[t] then
+		local ind
+		for val in linked.next_r,link,val do
+			if val>t then
+				ind=val
+				break
+			end
 		end
-		table.insert(array, n, nd)
+		link:insert_r(t,ind)
 	end
+end
+
+-------------------------------------------------------------------------------------
+-- Take a timer, dereference it
+-------------------------------------------------------------------------------------
+Timer.remove = function(t)
+	link:remove(t)
 end
 
 -------------------------------------------------------------------------------------
@@ -63,12 +77,17 @@ end
 -- This must be called by the scheduler every time a due date elapses.
 -------------------------------------------------------------------------------------
 function Timer.step()
-	if not array[1] then return end -- if no timer is set just return and prevent further processing
+	if link_r[0]==-1 then return end -- if no timer is set just return and prevent further processing
 	local now = os_time()
-	while array[1] and now >= array[1] do
-		local nd = table.remove(array, 1)
-		if events[nd] then
-			Cell.step('timer',nd)
+	while link_r[0]~=-1 and now >= link_r[0] do --about the aboce redundancy, maybe while loops are heavy?
+		local nd = link:remove()
+		local copy={}
+		for obj,_ in pairs(events[nd]) do
+			copy[obj]=true
+		end
+		events[nd]=nil
+		for obj,_ in pairs(copy) do
+			obj:handle('timer',nd)
 		end
 	end
 end
@@ -101,28 +120,38 @@ end
 -- returns the next expiration date
 -------------------------------------------------------------------------------------
 function Timer.nextevent()
-	-- pprint(array)
-	return array[1]
+	-- print(link)
+	if link_r[0]~=-1 then return link_r[0] end
 end
 
-
+local revents
 local meta={
 	__newindex=function(t,k,v)
-		-- print(t)
 		assert(type(k)=='number','timer events must be numbers')
-		if v~=nil then
+		if v==nil then
+			Timer.remove(k)
+		else
+			revents[k]=v
 			Timer.add(k)
 		end
-		rawset(t,k,v)
-	end
+	end,
+	__index=function(t,k)
+		return revents[k]
+	end,
+	__next=function(t,val)
+		return next(revents,val)
+	end,
 }
 ---resets the timer module
 Timer._reset=function()
-	sched.cells.timer=setmetatable({[{}]='placeholder'},meta)
-	events=sched.cells.timer
+	events=setmetatable({[{}]='placeholder'},meta)
+	sched.cells.timer=events
+	revents={}
+	
 	Cell=sched.Cell
-	array={}
-	n=0
+	link=linked()
+	link_r=link.r
+	Timer.link=link
 end
 
 return Timer
