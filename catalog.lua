@@ -14,11 +14,9 @@
 
 local log = require 'packages.log'
 local check=require'packages.checker'.check
-local sprint=require'packages.print'.sprint
+local sprint=require'utils.print'.sprint
 
-PACKAGE_NAME = 'sched'
-
-local sched=require'init'
+local sched=sched
 
 
 --get locals for some useful things
@@ -27,26 +25,23 @@ local next,  setmetatable, tostring, getmetatable
 
 local M = {}
 
-local rev = setmetatable({}, {__mode = "kv"}) --tables of object->name in catalogs indexed by catalogs
+local rev
+local catalogs
 
-local catalogs = setmetatable({},{__mode = "v",__tostring=function() return 'catalogs' end,__type='catalog'})
-rev[catalogs]={}
-rev[catalogs][catalogs]='catalogs'
-
-local register_events = setmetatable({}, {__mode = "kv"}) 
-function get_register_event (catalogd, name)
-	check('catalog,string',catalogd, name)
-	if register_events[catalogd] and register_events[catalogd][name] then 
-		return register_events[catalogd][name]
-	else
-		local register_event = setmetatable({}, {
-			__tostring=function() return 'register$'..rev[catalogs][catalogd]..'/'..name end,
-		})
-		register_events[catalogd] = register_events[catalogd] or {}
-		register_events[catalogd][name] = register_event
-		return register_event
-	end
-end
+-- local register_events = setmetatable({}, {__mode = "kv"}) 
+-- function get_register_event (catalogd, name)
+	-- check('catalog,string',catalogd, name)
+	-- if register_events[catalogd] and register_events[catalogd][name] then 
+		-- return register_events[catalogd][name]
+	-- else
+		-- local register_event = setmetatable({}, {
+			-- __tostring=function() return 'register$'..rev[catalogs][catalogd]..'/'..name end,
+		-- })
+		-- register_events[catalogd] = register_events[catalogd] or {}
+		-- register_events[catalogd][name] = register_event
+		-- return register_event
+	-- end
+-- end
 
 
 
@@ -60,13 +55,27 @@ M.register = function ( catalogd, name, object )
 	if catalogd[name] and catalogd[name] ~= object then
 		return nil, 'used'
 	end
-	print(rev,catalogd,object)
 	log('CATALOG', 'INFO', '%s registered in catalog %s as "%s"', 
 		tostring(object), rev[catalogs][catalogd], name)
 	catalogd[name] = object
 	rev[catalogd][object]=name
 	
-	sched.signal('catalog',get_register_event(catalogd, name),object) 
+	sched.signal('catalog',rev[catalogs][catalogd]..'+'..name,object) 
+	return true
+end
+
+M.unregister = function ( catalogd, name_or_object )
+	check('catalog',catalogd)
+	if type(name_or_object)=='string' then
+		rev[catalogd][catalogd[name_or_object]] = nil
+		catalogd[name_or_object]=nil
+	else
+		catalogd[rev[catalogd][name_or_object]]=nil
+		rev[catalogd][name_or_object] = nil
+	end
+	log('CATALOG', 'INFO', '%s unregistered from catalog %s, had name "%s"', 
+		tostring(object), rev[catalogs][catalogd], name)
+	sched.signal('catalog',rev[catalogs][catalogd]..'-'..name,object)
 	return true
 end
 
@@ -78,9 +87,9 @@ end
 -- @return the object if successful or nil in case of timeout
 M.waitfor = function ( catalogd, name, timeout )
 	check('catalog,string,?number',catalogd,name,timeout)
-	log('CATALOG', 'INFO', 'catalog %s queried for name "%s" by %s',tostring(catalogd), name,tostring(sched.me()))
+	log('catalog', 'INFO', 'catalog %s queried for name "%s" by %s',tostring(catalogd), name,tostring(sched.me()))
 	local object=catalogd[name] or select(3,sched.wait('catalog', get_register_event(catalogd, name),timeout))
-	log('CATALOG', 'INFO', 'catalog %s queried for name "%s" by %s, found %s',tostring(catalogd), name,tostring(sched.me()),tostring(object))
+	log('catalog', 'INFO', 'catalog %s queried for name "%s" by %s, found %s',tostring(catalogd), name,tostring(sched.me()),tostring(object))
 	return object 
 end
 
@@ -99,10 +108,10 @@ M.get_catalog = function (name)
 	end
 end
 
-M.reset = function ()
-	rev = setmetatable({}, {__mode = "kv"}) --tables of object->name in catalogs indexed by catalogs
+M._reset = function ()
+	rev = {} --tables of object->name in catalogs indexed by catalogs
 
-	catalogs = setmetatable({},{__mode = "v",__tostring=function() return 'catalogs' end,__type='catalog'})
+	catalogs = setmetatable({},{__tostring=function() return 'catalogs' end,__type='catalog',__index=M})
 	rev[catalogs]={}
 	rev[catalogs][catalogs]='catalogs'
 end
@@ -119,5 +128,3 @@ setmetatable(M,{__call=function(M,...)
 end})
 
 return M
-
-

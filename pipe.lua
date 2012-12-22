@@ -87,7 +87,7 @@ local insert, remove, os_time = table.insert, table.remove, os.clock
 -- A registry of all currently active pipes. This is intended as a debug aid,
 -- and can be safely commented out if not needed
 --------------------------------------------------------------------------------
--- sched.pipes = setmetatable({}, {__mode='kv'})
+sched.pipes = setmetatable({}, {__mode='kv'})
 
 --------------------------------------------------------------------------------
 -- Create a new pipe
@@ -102,10 +102,12 @@ function pipe(maxlength)
         state      = 'empty';
         wasteabs   = 32 ;
         wasteprop  = 2 }
-    if sched.pipes then 
-        sched.pipes[tonumber(tostring(instance):match(':.(.*)')]=instance --'0x%x+')]=instance 
+	if a==1 then
+	end
+    if sched.pipes then
+		sched.pipes[tonumber(tostring(instance):match(':.(.*)'))]=instance --'0x%x+')]=instance 
     end
-    setmetatable (instance, P)
+	setmetatable (instance, P)
     return instance
 end
 
@@ -113,7 +115,7 @@ end
 --------------------------------------------------------------------------------
 -- Check whether the 'state' field is consistent with the pipe's content
 -- and maxlength, produce a signal and change it if needed.
--- Helper for methodds which modify content or maxlength.
+-- Helper for methods which modify content or maxlength.
 --------------------------------------------------------------------------------
 local function updatestate (self)
     local length   = self.sndidx - self.rcvidx
@@ -163,7 +165,7 @@ function P :receive (timeout)
             log('pipe', 'DEBUG', "Pipe %s empty, :receive() waits for data", tostring(self))
             due_date = due_date or timeout and os_time() + timeout
             local timeout = due_date and due_date - os_time()
-            if timeout and timeout<=0 or sched.wait(self, {'state', timeout})=='timeout' then 
+            if timeout and timeout<=0 or sched.wait(self,'state',timeout)=='timer' then 
                 return nil, 'timeout' 
             end
         else
@@ -190,7 +192,7 @@ function P :send (x, timeout)
         log('pipe', 'DEBUG', "Pipe %s full, :send() blocks until some data is pulled from pipe", tostring(self))
         due_date = due_date or timeout and os_time() + timeout
         local timeout = due_date and due_date - os_time()
-        if timeout and timeout<=0 or wait(self, {'state', timeout})=='timeout' then
+        if timeout and timeout<=0 or sched.wait(self,'state', timeout)=='timer' then
             log('pipe', 'DEBUG', "Pipe %s :send() timeout", tostring(self))
             return nil, 'timeout'
         else

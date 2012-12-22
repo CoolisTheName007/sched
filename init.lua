@@ -1,7 +1,8 @@
 local log=require'packages.log'
 local pack	=require'utils.table'.pack
 local tnil	=require'utils.table'.tnil
-local check=require'packages.checker'.check
+local checker=require'packages.checker'
+local check,conform=checker.check,checker.conform
 local sprint =require'utils.print'.sprint
 local linked=require 'utils.linked'
 local table=table
@@ -11,16 +12,19 @@ PACKAGE_NAME='sched'
 
 
 
-local timer
+local sched,Cell,Obj,Sync,Timer,Task,platform
 local os_time
 
-local Cell={}
+
 local weak={__mode='kv'}
 local weak_key={__mode='k'}
-local cells={}
+
+local scheduler
+local running
+
+local fil
 --[[
-3D array of sets, cells[emitter][event][obj]=true
-cells are functions, storable in the table @cells
+2D array of sets of objs, fil[emitter][event][obj]=true
 wildcards for emitter, event are '*'; can only be used for listening
 reserved values; do not use for custom signals:
 	-emitters:
@@ -30,86 +34,85 @@ reserved values; do not use for custom signals:
 
 ---sets the sets  described by @t, a table {[emitter]={ev1,ev2,...},...} (creating them if @val~=nil)
 --@obj entries to @val
-Cell.multiset = function (t,obj,val) 
-	if val~=nil then
-		for emitter,events in pairs(t) do
-			local eml=cells[emitter]
-			if not eml then
-				eml={}
-				cells[emitter]=eml
-			end
-			local event
-			for i=1,#events do
-				event=events[i]
-				local evl=eml[event]
-				if not evl then
-					evl={}
-					eml[event]=evl
-				end
-				evl[obj]=val
-			end
-		end
-	else
-		for emitter,events in pairs(t) do
-			local eml=cells[emitter]
-			if eml then
-				local event
-				for i=1,#events do
-					event=events[i]
-					local evl=eml[event]
-					if evl then
-						evl[obj]=nil
-						if not next(evl) then eml[event]=nil end
-					end
-				end
-				if not next(eml) then cells[emitter]=nil end
-			end
-		end
-	end
-	return true
-end
+-- Cell.multiset = function (t,obj,val) 
+	-- if val~=nil then
+		-- for emitter,events in pairs(t) do
+			-- local eml=fil[emitter]
+			-- if not eml then
+				-- eml={}
+				-- fil[emitter]=eml
+			-- end
+			-- local event
+			-- for i=1,#events do
+				-- event=events[i]
+				-- local evl=eml[event]
+				-- if not evl then
+					-- evl={}
+					-- eml[event]=evl
+				-- end
+				-- evl[obj]=val
+			-- end
+		-- end
+	-- else
+		-- for emitter,events in pairs(t) do
+			-- local eml=fil[emitter]
+			-- if eml then
+				-- local event
+				-- for i=1,#events do
+					-- event=events[i]
+					-- local evl=eml[event]
+					-- if evl then
+						-- evl[obj]=nil
+						-- if not next(evl) then eml[event]=nil end
+					-- end
+				-- end
+				-- if not next(eml) then fil[emitter]=nil end
+			-- end
+		-- end
+	-- end
+	-- return true
+-- end
 
----same, but accepts only the alternate description of emitter,event
-Cell.uniset = function (emitter,event,obj,val)
-	local eml=cells[emitter]
-	if val~=nil then
-		if not eml then
-			eml={}
-			cells[emitter]=eml
-		end
-		local evl=eml[event]
-		if not evl then
-			evl={}
-			eml[event]=evl
-		end
-		evl[obj]=val
-	else
-		if eml then
-			local evl=eml[event]
-			if evl then
-				evl[obj]=val
-				if not next(evl) then eml[event]=nil end
-			end
-			if not next(eml) then cells[emitter]=nil end
-		end
-	end
-end
+-- ---same, but accepts only the alternate description of emitter,event
+-- Cell.uniset = function (emitter,event,obj,val)
+	-- local eml=fil[emitter]
+	-- if val~=nil then
+		-- if not eml then
+			-- eml={}
+			-- fil[emitter]=eml
+		-- end
+		-- local evl=eml[event]
+		-- if not evl then
+			-- evl={}
+			-- eml[event]=evl
+		-- end
+		-- evl[obj]=val
+	-- else
+		-- if eml then
+			-- local evl=eml[event]
+			-- if evl then
+				-- evl[obj]=val
+				-- if not next(evl) then eml[event]=nil end
+			-- end
+			-- if not next(eml) then fil[emitter]=nil end
+		-- end
+	-- end
+-- end
 
----both functions in one, chosen by number of args
-Cell.set = function(...)
-	if select('#',...)==4 then
-		Cell.uniset(...)
-	else
-		Cell.multiset(...)
-	end
-end
-
+-- ---both functions in one, chosen by number of args
+-- Cell.set = function(...)
+	-- if select('#',...)==4 then
+		-- Cell.uniset(...)
+	-- else
+		-- Cell.multiset(...)
+	-- end
+-- end
 
 ---emits a signal with emitter @emitter, event @event and parameters @vararg (...)
 --can be called recursively; be careful not to signal the same entry which is being run
-Cell.step = function (emitter,event,...) 
-	log('sched', 'DEBUG', "SIGNAL %s.%s.%s", tostring(emitter), tostring(event),sprint(...))
-	--pprint(cells['platform'] and next(cells['platform'].terminate),'asdfghj')
+local signal = function (emitter,event,...) 
+	log('sched', 'DEBUG', "SIGNAL %s.%s.[%s]", tostring(emitter), tostring(event),sprint(...))
+	
 	local function walk_event(evl,emitter,event,...)
 		local copy={}
 		for obj,val in pairs(evl) do
@@ -131,11 +134,11 @@ Cell.step = function (emitter,event,...)
 		end
 	end
 	
-	local eml=cells[emitter]
+	local eml=fil[emitter]
 	if eml then
 		walk_emitter(eml,emitter,event,...)
 	end
-	local eml=cells['*']
+	local eml=fil['*']
 	if eml then
 		walk_emitter(eml,emitter,event,...)
 	end
@@ -143,15 +146,22 @@ Cell.step = function (emitter,event,...)
 	return true
 end
 
-local Obj={}
----Abstract class that Task,Sync implement.
-Obj.meta={__index=Obj}
 
-Obj.new = function (handle)
-	local obj=setmetatable({
+
+Obj={}
+---Abstract class that Task,Sync implement.
+Obj.meta={__index=Obj,__tostring=function(t) return getmetatable(t).__type..':'..t.name end,__type='obj'}
+
+Obj.new = function (handle,name)
+	local obj={
 		handle=handle,
-		ts={},
-		},Obj.meta)
+		fil={},
+		subs={},
+		parent=running,
+	}
+	obj.parent.subs[obj]=true
+	obj.name=(name or tostring(obj):match(':.(.*)'))
+	setmetatable(obj,Obj.meta)
 	return obj
 end
 
@@ -160,13 +170,12 @@ end
 --or {[emt1]={ev1,ev2,...},...},timeout
 --timeout is optional and one use only
 local function get_args(...)
-	
 	local nargs=select('#',...)
 	local args={...}
 	local t,timeout
 	if type(args[nargs])=='number' then
-			timeout=args[nargs]
-			nargs=nargs-1
+		timeout=args[nargs]
+		nargs=nargs-1
 	end
 	if nargs~=0 then
 		if nargs==1 then
@@ -190,26 +199,101 @@ local add_timer=function(t,nd)
 	return t
 end
 
-
--- with methods link, unlink
 Obj.link = function (obj,t)
-	obj.ts[t]=true
-	Cell.multiset(t,obj,true)
+	local ofil=obj.fil
+	local fil_tev,ofil_tev,fil_tobj
+	for em,tev in pairs(t) do
+		fil_tev=fil[em]
+		ofil_tev=ofil[em]
+		if not ofil_tev then
+			ofil[em]={}
+			ofil_tev=ofil[em]
+			if not fil_tev then fil[em]={} fil_tev=fil[em] end
+		end
+		local ev
+		for i=1,#tev do
+			ev=tev[i]
+			ofil_tev[ev]=true
+			fil_tobj=fil_tev[ev]
+			if not fil_tobj then fil_tev[ev]={} fil_tobj=fil_tev[ev] end
+			fil_tobj[obj]=true
+		end
+	end
+	-- tprint(fil,3)
 	return obj
 end
 
-
 Obj.unlink = function (obj,t)
-	Cell.multiset(t,obj)
-	obj.ts[t]=nil
+	local ofil=obj.fil
+	local fil_tev,ofil_tev,fil_tobj
+	for em,tev in pairs(t) do
+		ofil_tev=ofil[em]
+		if ofil_tev then
+			fil_tev=fil[em]
+			local ev
+			for i=1,#tev do
+				ev=tev[i]
+				if ofil_tev[ev] then
+					ofil_tev[ev]=nil
+					
+					fil_tobj=fil_tev[ev]
+					fil_tobj[obj]=nil
+					if not next(fil_tobj) then fil_tev[ev]=nil end
+				end
+			end
+			if not next(ofil_tev) then ofil[em]=nil end
+			if not next(fil_tev) then fil[em]=nil end
+		end
+	end
 	return obj
 end
 
 Obj.reset = function (obj)
-	for t,_ in pairs(obj.ts) do
-		Cell.multiset(t,obj)
+	local fil_tev
+	for em,tev in pairs(obj.fil) do
+		fil_tev=fil[em]
+		for ev in pairs(tev) do
+			-- print(ev,'|',obj,'|',fil_tev[ev],'|',fil_tev[ev][obj])
+			fil_tev[ev][obj]=nil
+			if not next(fil_tev[ev]) then fil_tev[ev]=nil end
+		end
+		if not next(fil_tev) then fil[em]=nil end
 	end
-	obj.ts={}
+	obj.fil={}
+	return obj
+end
+
+Obj.finalize = function(obj)
+	--handle subs
+	local del
+	for sub in next,obj.subs,del do
+		if del then del:kill() end --may trigger actions
+		del=sub
+	end
+	if del then del:kill() end
+	
+	obj.parent.subs[obj]=nil
+	
+	--remove filters
+	obj:reset()
+	return obj
+end
+
+Obj.kill = function(obj)
+	signal(obj,'killedby',running)
+	signal(obj,'dying',nil,'killed') --warns subs
+	obj:finalize()
+	signal(obj,'dead',nil,'killed')
+	return obj
+end
+
+--Obj.setSub = function(obj,sub) dangerous
+
+Obj.setParent=function(obj,parent)
+	obj.parent.subs[obj]=nil
+	parent=parent or scheduler
+	obj.parent=parent
+	parent.subs[obj]=true
 	return obj
 end
 
@@ -220,9 +304,9 @@ Obj.setTimeout=function(obj,timeout)
 end
 
 Obj.resetTimeout=function(obj)
-	Cell.uniset('timer',obj.td.timer[1],obj)
+	obj:unlink(obj.td)
 	obj.td.timer[1]=os_time()+obj.timeout
-	Cell.uniset('timer',obj.td.timer[1],obj,true)
+	obj:link(obj.td)
 end
 
 Obj.cancelTimeout=function(obj)
@@ -237,19 +321,20 @@ once are one-use,
 on are permanent,
 timeouts only fire once,
 ]]
-local Sync={}
-Sync.meta={__type='sync',__tostring=function(t) return 'sync:'..t.name end,__index=Obj}
-setmetatable(Sync,{
+Sync = setmetatable({},{
 	__tostring=function() return 'Class Sync' end,
 	__index=Obj,
 })
+Sync.meta={__index=Sync,__tostring=Obj.meta.__tostring,__type='sync'}
 
 local sync_once_handle = function(sync,...)
+	running=obj
 	sync.f(...)
+	running=scheduler
 	sync:reset()
 end
 
-local get_o_name=function(a,b)
+local get_o_name=function(a,b,...)
 	if type(a)=='string' then
 		return b,a
 	else
@@ -260,72 +345,58 @@ end
 Sync.once = function (...)
 	local f,name=get_o_name(...)
 	check('function,?string',f,name)
-	local sync=Obj.new(sync_once_handle)
+	local sync=Obj.new(sync_once_handle,name)
 	sync.f=f
-	sync.name='once'..(name or tostring(sync):match(':.(.*)'))
 	setmetatable(sync,Sync.meta)
-	
+
 	local t,timeout=get_args(select(name and 3 or 2,...))
 	if timeout then t=add_timer(t,timeout+os_time()) end
-	sync:link(t)
+	if t then sync:link(t) end
 	
 	log('sched', 'DETAIL', 'created Sync.once %s from %s with signal descriptor %s', tostring(sync), tostring(f),sprint(...))
 	return sync
 end
 
 local sync_on_handle=function(obj,...)
+	running=obj
 	if obj.timeout then
 		obj.f(...)
 		obj:resetTimeout()
+	else
+		obj.f(...)
 	end
-	obj.f(...)
-end
-
-local sync_perm_kill=function(obj)
-	obj:reset()
+	running=scheduler
 end
 
 Sync.on = function (...)
 	local f,name=get_o_name(...)
 	check('function,?string',f,name)
-	local sync=Obj.new(sync_on_handle)
+	local sync=Obj.new(sync_on_handle,name)
 	sync.f=f
-	sync.name='on'..(name or tostring(sync):match(':.(.*)'))
 	setmetatable(sync,Sync.meta)
 	sync.kill=sync_perm_kill
 	local t,timeout=get_args(select(name and 3 or 2,...))
 	if timeout then
 		sync:setTimeout(timeout)
 	end
-	sync:link(t)
+	if t then sync:link(t) end
 	log('sched', 'DETAIL', 'created Sync.on %s from %s with signal descriptor %s', tostring(sync), tostring(f),sprint(...))
 	return sync
 end
 
-
-
 --asyncronous calls through coroutines
 Task={}
-Task.meta={__index=Task,__type='task',__tostring=function(t) return 'task:'..t.name end}
-
 setmetatable(Task,{
 	__tostring=function() return 'Class Task' end,
 	__index=Obj,
 })
-
-Task.running=nil
-Task.ready=linked.new()
-local KILL_TOKEN={}
-
-
-Task.kill=Obj.reset
+Task.meta={__index=Task,__tostring=Obj.meta.__tostring,__type='task'}
 
 ---Creates a task object in paused mode;
----fields set by Task.new are 
---status: 'paused'|'ready'|'dead'
+---fields set by Task.new are
 --co: matching coroutine
 --args: table of args to unpack and pass on first run; subsequently they are used to pass events internally
---created_by: parent task
+--parent: parent task
 --subs: sub tasks (see @{Task.setSub} and @{Task.setParent}
 --name: name used for logging and result of tostring(task)
 --Can take either (f,...) or (name,f,...) as args
@@ -334,25 +405,28 @@ Task.kill=Obj.reset
 --@return task
 Task.new = function (...)
 	local f,name=get_o_name(...)
-	print(name)
 	check('function,?string',f,name)
-	local task = Obj.new(Task.handle)
+	
+	local task = Obj.new(Task.handle,name)
 	setmetatable(task,Task.meta)
-	task.name=name or tostring(task):match(':.(.*)')
+	
 	task.co=coroutine.create( f )
-	task.status='paused'
 	task.args={select(name and 3 or 2,...)}
-	task.created_by=Task.running
-	task.subs=setmetatable({}, weak_key)
-	log('sched', 'INFO', 'Task.new created %s from %s with initial args %s by %s', tostring(task), tostring(f),args and sprint(unpack(args)) or '(no args)',tostring(Task.running or 'scheduler'))
+	
+	log('sched', 'INFO', 'Task.new created %s from %s with initial args %s by %s', tostring(task), tostring(f),args and sprint(unpack(args)) or '(no args)',tostring(running))
 	return task
 end
 
 ---
 function Task.handle(task,...)
-	log('sched', 'DETAIL', 'Task.handle rescheduling %s to receive SIGNAL %s.%s.%s', tostring(task),...,select(2,...),sprint(select(3,...)))
+	check('task',task)
+	
 	task.args={...}
 	Task.ready:insert_r(task)
+	
+	log('sched', 'DETAIL', 'Task.handle rescheduling %s to receive SIGNAL %s.%s.%s',
+	tostring(task),tostring(...),tostring(select(2,...)),sprint(select(3,...)))
+	return task
 end
 
 
@@ -360,34 +434,32 @@ end
 --@return task
 Task.run = function(task,...)
 	check('task',task)
-	log('sched', 'INFO', "Task.run scheduling %s", tostring(task))
-	task.status='ready'
 	Task.ready:insert_r(task)
-    return task
+    log('sched', 'INFO', "Task.run scheduling %s", tostring(task))
+	return task
 end
 
 
 
 --- Finishes a task and kills it's subs.
--- The killed task will emit a signal task,'die','killed',Task.running Can be 
+-- The killed task will emit a signal task,'die','killed',running Can be 
 -- invoked as task:kill().
 -- @param task task to terminate (see @{Task.new})
 -- @return  task
-Task.kill = function ( task )
+Task.kill = function (task)
 	check('task',task)
-	log('sched', 'INFO', 'Task.kill killing %s from %s', tostring(task), tostring(Task.running or 'scheduler'))
-	task.status='dead'
-	task:reset()
-	for sub, _ in pairs(task.subs) do --do not create an infinite sub loop!
-		sub:kill()
+	if task.status~='dead' then
+		log('sched', 'INFO', "Task.kill killing %s from %s", tostring(task),tostring(running))
+		signal(task,'killedby',running)
+		signal(task,'dying')
+		task:finalize()
+		Task.ready:remove(task)
+		task.status='dead'
+		signal(task,'dead')
+		if Task.running and Task.running.status=='dead' and Task.running.co==coroutine.running() then
+			coroutine.yield()
+		end
 	end
-	if task==Task.running then
-        coroutine.yield(KILL_TOKEN)
-		error()
-    else
-        coroutine.resume (task.co, KILL_TOKEN)
-    end
-	Cell.step (task, "die", 'killed',Task.running)
 	return task
 end
 
@@ -398,33 +470,25 @@ end
 -- @return  emitter, event, parameters
 Task.wait= function(...)
 	local nd
-	local task = (Task.running and Task.running.co==coroutine.running()) and Task.running or
-        error ("Don't call Cell.step() while not running a task!")
+	local task = running
+	if task.co~=coroutine.running() then error('calling Task.wait outside a task',2) end
 	if ...==nil then
 		log('sched', 'DETAIL', "Task.wait rescheduling %s for resuming ASAP", tostring(task))
-		task.status='ready'
 		Task.ready:insert_r(task)
-	elseif ... then --only set new cells if necessary;
+	elseif ... then
 		log('sched', 'DETAIL', "%s waiting with args %s", tostring(task),sprint(...))
 		local t,timeout=get_args(...)
-		if timeout then task:setTimeout(timeout) end
-		if t then task:link(t) end
+		t=timeout and add_timer(t,os_time()+timeout) or t
+		task:link(t)
 	else
 		log('sched', 'DETAIL', "%s waiting for pre-set signals", tostring(task),sprint(...))
 	end
 	
-	Task.running = nil
-    local x = {coroutine.yield ()}
+    coroutine.yield ()
 	if ... then
 		task:reset()
-		-- pprint(cells)
 	end
-	
-	if x[1] == KILL_TOKEN then
-		error()
-	else
-		return unpack(x)
-	end
+	return unpack(task.args)
 end
 
 
@@ -433,26 +497,21 @@ local Wait={} --some optimizations
 Wait.loop = function (f,...)
 	check('function',f)
 	local t,timeout=get_args(...)
-	local task=Task.running or error("Don't call Wait.loop outside a task!")
+	check('task',running)
+	local task=running
 	local t=t or {}
-	task.ts[t]=true
-	Cell.multiset(t,task,true)
+	task:link(t)
 	if timeout then 
-		local timer,out
-		local tt={timer={}}
-		task.ts[tt]=true
-		local nd
+		local nd=os_time()+timeout
 		while true do
 			log('Wait','DEBUG','in loop')
-			tt.timer[1]=nd
 			nd=os_time()+timeout
-			Cell.uniset('timer',nd,task,true)
+			task:link{timer={nd}}
 			out=f(sched.wait(false))
-			Cell.uniset('timer',nd,task)
+			task:unlink{timer={nd}}
 			if out then break end
 		end
 		log('Wait','DEBUG','out loop')
-		task.ts[tt]=nil
 	else
 		while true do
 			log('Wait','DEBUG','in loop')
@@ -460,8 +519,7 @@ Wait.loop = function (f,...)
 		end
 		log('Wait','DEBUG','out loop')
 	end
-	Cell.multiset(t,task)
-	task.ts[t]=false
+	task:unlink(t)
 end
 
 ---This function runs the coroutines of all tasks in Task.ready,
@@ -481,32 +539,27 @@ Task.step = function()
 		
 		local co=task.co
 		
-		Task.running = task
         log('sched', 'DETAIL', "Resuming %s", tostring (task))
-        local success, msg = coroutine.resume (co,unpack(task.args))
+		running = task
+		Task.running=task
+        local success, msg,target = coroutine.resume (co)
+		Task.running=nil
+		running = scheduler
         task.args={}
 		if not success then
             -- report the error msg
             log('sched', 'ERROR', "In %s:%s", tostring (task),tostring(msg))
-        elseif msg==KILL_TOKEN then
-			coroutine.resume(co)
-		end
-        ---------------------------------------------
-        -- If the coroutine died, signal it for those
-        -- who synchronize on its termination.
-        ---------------------------------------------
-        if coroutine.status (co) == "dead" then
+			signal(task, "error",success, msg)
+			--preserve events/subs for error catchers to analize, and then finalize
+			task:finalize()
+		elseif coroutine.status (co) == "dead" then --If the coroutine died, signal it for those who synchronize on its termination.
 			log('sched', 'INFO', "%s is dead", tostring (task))
-			task.status = 'dead'
-			task:reset()
-			for sub, _ in pairs(task.subs) do --do not create an infinite sub loop!
-				sub:kill()
-			end
-			Cell.step (task, "die", success, msg)
-        end
+			signal(task, "dying", success, msg)
+			task:finalize() --kills subs and cleans up filters 
+			Task.ready:remove(task)
+			signal(task, "dead", success, msg)
+		end
     end
-
-    Task.running = nil
 end
 
 --helper
@@ -572,33 +625,8 @@ Task.sigrunonce = function(...)
 	return task:run()
 end
 
-
---- Attach a task/Sync object as a sub to another.
--- An attached task will be killed by the scheduler whenever
--- the parent task is finished (returns, errors or is killed). Can be 
--- invoked as task:setSub(sub).
--- @param task The parent task
--- @param sub The sub task.
--- @return the modified task.
-Task.setSub = function (task, sub)
-	task.subs[sub] = true
-	log('sched', 'INFO', '%s is a sub of to %s', tostring(sub), tostring(task))
-	return task
-end
-
---- Set a task as attached to the creator task.
--- An attached task will be killed by the scheduler whenever
--- the parent task (the task that created it) is finished (returns, errors or is killed). 
--- Can be invoked as task:setParent().
--- @param task The sub task.
--- @return the modified task.
-Task.setParent = function(task)
-	if task.created_by then Task.setSub(task.created_by, task) end
-	log('sched', 'INFO', '%s is a subtask of to %s', tostring(sub), tostring(task))
-	return task
-end
-
 Task._reset=function()
+	Task.running=nil
 	Task.ready=linked.new()
 end
 
@@ -607,8 +635,8 @@ end
 
 sched={
 --modules and respective shortcuts
-Cell=Cell,
-cells=cells,
+-- fil=fil,
+signal=signal,
 Obj=Obj,
 
 Wait=Wait,
@@ -619,23 +647,21 @@ on=Sync.on,
 
 Task=Task,
 task=Task.new,
-me=function() return Task.running end,
+me=function() return running end,
 wait=Task.wait,
 sigrun=Task.sigrun,
 sigrunonce=Task.sigrunonce,
-
 --others
-signal=Cell.step,
-
 emit=function(...)
-	Cell.step(sched.me(),...)
+	sched.signal(sched.me(),...)
 end
 }
 local renv=setmetatable({sched=sched},{__index=_G})
-local platform=require('platform',nil,nil,renv)
+
+platform=require('platform',nil,nil,renv)
 os_time=platform.time
 
-local Timer=require('timer',nil,nil,renv)
+Timer=require('timer',nil,nil,renv)
 
 sched.Timer=Timer
 sched.platform=platform
@@ -650,11 +676,47 @@ end
 
 ---resets internal vars
 function sched.reset()
-	tnil(cells)
+	if scheduler then
+		scheduler:kill()
+	end
+	
+	fil={}
+	sched.fil=fil
+	
+	scheduler=setmetatable(
+	{
+	subs={},
+	name='scheduler',
+	kill=function(obj)
+		log('sched', 'INFO', "killing %s from %s", tostring(obj),tostring(running))
+		signal(obj,'killedby',running)
+		signal(obj,'dying',nil,'killed') --warns subs
+		local del
+		for sub in next,obj.subs,del do
+			if del then del:kill() end --may trigger actions
+			del=sub
+		end
+		if del then del:kill() end
+		obj.subs={}
+		obj.status='dead'
+		signal(obj,'dead',nil,'killed')
+		if Task.running and Task.running.status=='dead' and Task.running.co==coroutine.running() then
+			coroutine.yield()
+		end
+		return obj
+	end
+	},{
+	__tostring=function(t) return t.name end,
+	})
+	
+	sched.scheduler=scheduler
+	running=scheduler
+	
 	Timer._reset()
 	Task._reset()
 	
 	platform._reset() --after Timer
+	
 	loop_state = 'stopped'
 	log('sched','INFO','scheduler cleaned.')
 end
@@ -666,15 +728,14 @@ function sched.loop ()
 	log('sched','INFO','Scheduler started')
     loop_state = 'running'
 	local Task=Task
-	local cells=cells
     local Timer_nextevent, Timer_step, Task_step, platform_step =
         Timer.nextevent, Timer.step, Task.step, platform.step
 		
-    while true do
-		--this block is a scheduler cycle
+    while true do --this block is the scheduler step
         Timer_step() -- Emit timer signals
         Task_step() -- Run all the ready tasks
-
+		-- tprint(sched.fil,3)
+		-- read()
         -- Find out when the next timer event is due
         local timeout = nil
 		
@@ -683,12 +744,11 @@ function sched.loop ()
 			local now=os_time()
 			timeout = date<now and 0 or date-now 
 		end
-		
-		if loop_state~='running' then sched.reset() break end
+		-- tprint(sched.fil,2)
+		if loop_state~='running' or not next(scheduler.subs) then sched.reset() break end
 		-- if loop_state~='running' then break end
 		platform_step (timeout,date) -- Wait for platform events until the next timer is due
     end
 end
 sched.reset()
-
 return sched

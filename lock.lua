@@ -141,9 +141,9 @@ end
 --------------------------------------------------------------------------------
 local function protectdie(self, thread)
     if not LOCK.hooks[thread] then
-        local h = sched.sigonce(thread, "die", function() 
+        local h = sched.sigonce(function() 
             autorelease(thread)
-        end)
+        end,thread, "die")
         LOCK.hooks[thread] = {sighook = h}
     end
     (LOCK.hooks[thread])[self] = true
@@ -155,7 +155,7 @@ end
 local function unprotectdie(self, thread)
     (LOCK.hooks[thread])[self] = nil
     if not next(LOCK.hooks[thread], next(LOCK.hooks[thread])) then -- if this was the last lock attached to that thread...
-        sched.kill(LOCK.hooks[thread].sighook)
+        (LOCK.hooks[thread].sighook):kill()
         LOCK.hooks[thread] = nil
     end
 end

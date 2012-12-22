@@ -6,17 +6,21 @@
 --      support simple timers
 ------------------------------------------------------------------------------
 
-linked=require'utils.linked'
-check=require'packages.checker'.check
+local linked=require'utils.linked'
+local check=require'packages.checker'.check
+local shcopy=require'utils.table'.shcopy
 local pprint=pprint
 local print=print
+local error=error
+local read=read
 PACKAGE_NAME='sched'
 
 
-local linked=require'utils.linked'
+
 
 local sched=sched
-local cells=sched.cells
+local fil
+local Obj=sched.Obj
 local os = os
 local math = math
 local tonumber = tonumber
@@ -29,11 +33,22 @@ local _G=_G
 local os_time=os.clock
 local setmetatable=setmetatable
 local rawset=rawset
+local unpack=unpack
+
 env=getfenv()
 setmetatable(env,nil)
 
 
+local function norm(t) --the CC clock moves in steps of 0.05
+	t=t-t%0.05
+	if t<=0 then
+		error('time values must be non-negative and multiples of 0.05',3)--to be used internally inside Timer functions
+	end
+	return t
+end
+
 local Timer={}
+Timer.norm=norm
 -------------------------------------------------------------------------------------
 -- Common scheduling code
 -------------------------------------------------------------------------------------
@@ -44,7 +59,6 @@ local Timer={}
 -------------------------------------------------------------------------------------
 local function stimer_nextevent (timer) return nil end
 
-local Cell
 local events
 local link,link_r
 local n
@@ -81,37 +95,37 @@ function Timer.step()
 	local now = os_time()
 	while link_r[0]~=-1 and now >= link_r[0] do --about the aboce redundancy, maybe while loops are heavy?
 		local nd = link:remove()
-		local copy={}
-		for obj,_ in pairs(events[nd]) do
-			copy[obj]=true
-		end
-		events[nd]=nil
-		for obj,_ in pairs(copy) do
-			obj:handle('timer',nd)
-		end
+		sched.signal('timer',nd)
 	end
 end
 
+Timer.meta={__index=Timer}
+setmetatable(Timer,{__index=Obj,__tostring=function() return 'Class Timer' end})
 
-Timer.kill=function(timer)
-	Cell.uniset('timer',timer.nd,timer)
+local get_o_name=function(a,b,...)
+	if type(a)=='string' then
+		return b,a
+	else
+		return a
+	end
 end
 
 --helper for cyclic timer
-local function cycle_cell(obj)
-	obj.nd=os_time()+obj.delta
-	local t=obj.nd
-	events[t]=events[t] or {}
-	events[t][obj]=true
+local function cycle_handle(obj,_,ev)
+	ev=ev+obj.delta
+	obj:link{timer={ev}}
 	obj.f(unpack(obj.args))
 end
 -------------------------------------------------------------------------------------
 -- Cyclic (repetitive) timer
 -- @return timer object.
 -------------------------------------------------------------------------------------
-function Timer.cycle(delta,f,...)
-	check('number,function',delta,f)
-	local timer={delta=delta,f=f,args={...},kill=kill}
+function Timer.cycle(delta,...)
+	delta=norm(delta)
+	local f,name=get_o_name(...)
+	check('number,function,?string',delta,f,name)
+	local timer=Obj.new(cycle_handle,name)
+	shcopy({delta=delta,f=f,args={...}},timer)
 	return timer
 end
 
@@ -124,31 +138,27 @@ function Timer.nextevent()
 	if link_r[0]~=-1 then return link_r[0] end
 end
 
-local revents
 local meta={
 	__newindex=function(t,k,v)
-		assert(type(k)=='number','timer events must be numbers')
+		if type(k)~='number' then
+			error(tostring(k)..'timer events must be numbers',2)
+		end
+		-- k=k-k%0.05 --math.ceil(t/0.05)*0.05 --maybe round up for user comfort? this way it's 1.5 time faster
+		if k<=0 then
+			error(k..'time values must be positive',2) 
+		end
 		if v==nil then
 			Timer.remove(k)
-		else
-			revents[k]=v
+		else--could move it here...
 			Timer.add(k)
 		end
-	end,
-	__index=function(t,k)
-		return revents[k]
-	end,
-	__next=function(t,val)
-		return next(revents,val)
+		rawset(t,k,v)
 	end,
 }
 ---resets the timer module
 Timer._reset=function()
 	events=setmetatable({[{}]='placeholder'},meta)
-	sched.cells.timer=events
-	revents={}
-	
-	Cell=sched.Cell
+	sched.fil.timer=events
 	link=linked()
 	link_r=link.r
 	Timer.link=link

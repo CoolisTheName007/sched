@@ -3,22 +3,20 @@
 local log=require 'packages.log'
 local sprint=require'utils.print'.sprint
 local sched,pairs,string,term,_G,fs,os,print,unpack,select,pprint=sched,pairs,string,term,_G,fs,os,print,unpack,select,pprint
-
+local tostring,math=tostring,math
 PACKAGE_NAME='sched'
 
 local os_pullEventRaw=os.pullEventRaw
 local sched=sched
-local cells
+local fil
 local link_r
-function _reset()
-	cells=sched.cells
-	link_r=sched.Timer.link.r
-end
+local read=read
+local tprint=tprint
 env=getfenv()
 setmetatable(env,nil)
 
 is_running=function()
-	return sched and sched.sched.tasks.running
+	return sched and sched.Task.running
 end
 
 
@@ -170,7 +168,7 @@ for t,tf in pairs(new) do
 	all[t]={}
 	for i,f in pairs(tf) do
 		all[t][i]=function(...)
-			if sched and sched.Task.running then
+			if sched and sched.me()~=sched.scheduler then
 				return new[t][i](...)
 			else
 				return old[t][i](...)
@@ -182,36 +180,60 @@ end
 
 local time=os.clock
 env.time = time
-
+local WAIT_TOKEN=tostring({})
+local last_yield=-1
 local Task=sched.Task
+-- local a=0
+-- local ta
 function step(timeout,nd)
-	log("platform", "DEBUG", timeout and 'timeout is '..timeout or 'no timeout')
 	local tr=Task.ready.r
 	if tr[0]~=-1 then timeout=0 end
 	if timeout then
-		local id=os.startTimer(timeout)
-		local x
-		if cells.platform then
-			local plat=cells.platform
+		local id
+		if timeout==0 then
+			-- t=time()
+			-- if t~=ta then print(t) ta=t end
+			if time()-last_yield>=0.05 then --retain control for at most (as far as the scheduler can control) one tick if necessary; set to math.huge in case there is too much of a delay between computers;
+				-- a=a+1
+				-- print(a,':',last_yield,':',t)
+				id=os.queueEvent('timer',WAIT_TOKEN)
+			else
+				return
+			end
+		else
+			id=os.startTimer(timeout)
+		end
+		if fil.platform then
+			local x
+			local plat=fil.platform
 			repeat
 				x={os_pullEventRaw()}
 				if x[2]==id then
+					last_yield=time()
 					break
 				else
 					sched.signal('platform',unpack(x))
-					-- print(sched.Timer.link)
-					-- print(link_r[0],nd)
-					if tr[0]~=-1 or link_r[0]~=nd then break end
+					if tr[0]~=-1 or link_r[0]~=nd then last_yield=time() break end
 				end
 			until false
 		else
 			repeat
 			until id == select(2,os_pullEventRaw('timer'))
+			last_yield=time()
 		end
 	else
 		sched.signal('platform',os_pullEventRaw())
+		last_yield=time()
 	end
-	log("platform", "DEBUG",'leaving')
+end
+
+function _last_yield() --for debug
+	return last_yield
+end
+
+function _reset()
+	fil=sched.fil
+	link_r=sched.Timer.link.r
 end
 
 return env
