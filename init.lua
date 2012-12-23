@@ -281,9 +281,9 @@ end
 
 Obj.kill = function(obj)
 	signal(obj,'killedby',running)
-	signal(obj,'dying',nil,'killed') --warns subs
+	signal(obj,'dying') --warns subs
 	obj:finalize()
-	signal(obj,'dead',nil,'killed')
+	signal(obj,'dead')
 	return obj
 end
 
@@ -412,7 +412,6 @@ Task.new = function (...)
 	
 	task.co=coroutine.create( f )
 	task.args={select(name and 3 or 2,...)}
-	
 	log('sched', 'INFO', 'Task.new created %s from %s with initial args %s by %s', tostring(task), tostring(f),args and sprint(unpack(args)) or '(no args)',tostring(running))
 	return task
 end
@@ -471,7 +470,7 @@ end
 Task.wait= function(...)
 	local nd
 	local task = running
-	if task.co~=coroutine.running() then error('calling Task.wait outside a task',2) end
+	if task.co~=coroutine.running() then error('calling Task.wait outside a task/inside a task but inside another coroutine',2) end
 	if ...==nil then
 		log('sched', 'DETAIL', "Task.wait rescheduling %s for resuming ASAP", tostring(task))
 		Task.ready:insert_r(task)

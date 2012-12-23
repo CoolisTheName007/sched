@@ -45,7 +45,7 @@
 --   This call will block if necessary. It also supports an optional timeout 
 --   parameter. If there is a timeout and nothing can be read within the delay,
 --   nil is returned.
--- - do a non-blocking, non-consumming peek at next avlue with:
+-- - do a non-blocking, non-consumming peek at next value with:
 --    P :peek()
 --   This might return nil is the pipe is currently empty.
 -- - return all of the pipe's current content and reset it as empty with:
@@ -102,10 +102,9 @@ function pipe(maxlength)
         state      = 'empty';
         wasteabs   = 32 ;
         wasteprop  = 2 }
-	if a==1 then
-	end
+		
     if sched.pipes then
-		sched.pipes[tonumber(tostring(instance):match(':.(.*)'))]=instance --'0x%x+')]=instance 
+		sched.pipes[tostring(instance):match(':.(.*)')]=instance --'0x%x+')]=instance 
     end
 	setmetatable (instance, P)
     return instance
@@ -185,7 +184,7 @@ end
 --------------------------------------------------------------------------------
 function P :send (x, timeout)
     check ('pipe,?,?number',self, x, timeout)
-    assert (x~=nil, "Don't :send(nil) in a pipe")
+    if x==nil then error("Don't :send(nil) in a pipe",2) end
     local maxlength = self.maxlength
     local due_date
     while self.state == 'full' do
