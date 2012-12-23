@@ -186,6 +186,9 @@ local Task=sched.Task
 -- local a=0
 -- local ta
 function step(timeout,nd)
+	-- tprint(sched.fil,3)
+	-- print(Task.ready)
+	-- read()
 	local tr=Task.ready.r
 	if tr[0]~=-1 then timeout=0 end
 	if timeout then
@@ -196,7 +199,8 @@ function step(timeout,nd)
 			if time()-last_yield>=0.05 then --retain control for at most (as far as the scheduler can control) one tick if necessary; set to math.huge in case there is too much of a delay between computers;
 				-- a=a+1
 				-- print(a,':',last_yield,':',t)
-				id=os.queueEvent('timer',WAIT_TOKEN)
+				os.queueEvent('timer',WAIT_TOKEN)
+				id=WAIT_TOKEN
 			else
 				return
 			end
@@ -213,17 +217,27 @@ function step(timeout,nd)
 					break
 				else
 					sched.signal('platform',unpack(x))
-					if tr[0]~=-1 or link_r[0]~=nd then last_yield=time() break end
+					if (not fil.platform) or tr[0]~=-1 or link_r[0]~=nd then last_yield=time() break end
 				end
 			until false
+			return
 		else
 			repeat
 			until id == select(2,os_pullEventRaw('timer'))
 			last_yield=time()
+			return
 		end
 	else
+		if not fil.platform then
+			if next(fil) then
+				log('platform','WARNING','listeners left un-triggered, no timers or platform listeners, so exiting.')
+			end
+			sched.stop()
+			return
+		end
 		sched.signal('platform',os_pullEventRaw())
 		last_yield=time()
+		return
 	end
 end
 

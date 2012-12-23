@@ -541,7 +541,7 @@ Task.step = function()
         log('sched', 'DETAIL', "Resuming %s", tostring (task))
 		running = task
 		Task.running=task
-        local success, msg,target = coroutine.resume (co)
+        local success, msg,target = coroutine.resume (co,unpack(task.args))
 		Task.running=nil
 		running = scheduler
         task.args={}
@@ -688,8 +688,8 @@ function sched.reset()
 	name='scheduler',
 	kill=function(obj)
 		log('sched', 'INFO', "killing %s from %s", tostring(obj),tostring(running))
-		signal(obj,'killedby',running)
-		signal(obj,'dying',nil,'killed') --warns subs
+		signal(obj,'dying',running) --warns subs
+		signal(obj.parent,'dying_sub',obj,'killed_by',running)
 		local del
 		for sub in next,obj.subs,del do
 			if del then del:kill() end --may trigger actions
@@ -698,7 +698,7 @@ function sched.reset()
 		if del then del:kill() end
 		obj.subs={}
 		obj.status='dead'
-		signal(obj,'dead',nil,'killed')
+		signal(obj,'dead',running)
 		if Task.running and Task.running.status=='dead' and Task.running.co==coroutine.running() then
 			coroutine.yield()
 		end
@@ -715,7 +715,6 @@ function sched.reset()
 	Task._reset()
 	
 	platform._reset() --after Timer
-	
 	loop_state = 'stopped'
 	log('sched','INFO','scheduler cleaned.')
 end
@@ -729,7 +728,7 @@ function sched.loop ()
 	local Task=Task
     local Timer_nextevent, Timer_step, Task_step, platform_step =
         Timer.nextevent, Timer.step, Task.step, platform.step
-		
+	
     while true do --this block is the scheduler step
         Timer_step() -- Emit timer signals
         Task_step() -- Run all the ready tasks
@@ -744,7 +743,7 @@ function sched.loop ()
 			timeout = date<now and 0 or date-now 
 		end
 		-- tprint(sched.fil,2)
-		if loop_state~='running' or not next(scheduler.subs) then sched.reset() break end
+		if loop_state~='running' then sched.reset() break end
 		-- if loop_state~='running' then break end
 		platform_step (timeout,date) -- Wait for platform events until the next timer is due
     end

@@ -23,7 +23,7 @@ sched.reset()
 
 log=require 'packages.log'
 print('time to load (precision is 0.05 for everything in CC):'..(os.clock()-ta))
--- log.setlevel('DETAIL')--,'sched')--,'catalog')
+-- log.setlevel('ALL')--,'sched')--,'catalog')
 -- -- env=getfenv()
 -- for i,v in pairs(sched.platform.all[_G]) do
 	-- rawset(_G,i,v)
@@ -48,7 +48,9 @@ a=function()
 		-- -- sched.wait('run','*')
 		-- -- sched.stop()
 	-- -- end
-	c=function()
+	c=function(number)
+		print(number)
+		sched.wait(3)
 		ta=os.clock()
 		for i=1,1000 do
 			sched.wait()
@@ -77,17 +79,12 @@ a=function()
 			sched.wait(false)
 			write'11\n'
 		end):run()
-		print(1)
-		local old=sched.me().parent
-		sched.me():setParent()
-		print(2)
-		old:kill()
-		sched.me().parent:kill()
+		-- sched.me().parent:kill()
 		print('still alive...')
 		sched.wait('platform','key')
 	end
 	
-	sched.task('c',c):run()
+	sched.task('c',c,1000):run()
 	sched.wait('platform','terminate')
 	sched.me():kill()
 	sched.wait(2)
