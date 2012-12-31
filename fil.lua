@@ -7,7 +7,11 @@ Fil=setmetatable({},{__tostring='Class Fil'})
 Fil.meta={
 	__index=Fil,
 	__tostring=function(t)
-		return stringify(t,nil,nil,nil,nil,3)
+		local meta=getmetatable(t)
+		setmetatable(t,nil)
+		local s=stringify(t,nil,nil,nil,nil,3)
+		setmetatable(t,meta)
+		return s
 	end,
 }
 

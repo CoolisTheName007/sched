@@ -110,15 +110,17 @@ reserved values; do not use for custom signals:
 
 ---emits a signal with emitter @emitter, event @event and parameters @vararg (...)
 --can be called recursively; be careful not to signal the same entry which is being run
-local signal = function (emitter,event,...) 
+local signal = function (emitter,event,...)
+	-- local d=false
 	log('sched', 'DEBUG', "SIGNAL %s.%s.[%s]", tostring(emitter), tostring(event),sprint(...))
-	
+	-- if tostring(emitter)=='task:osi' then d=true print( emitter, tostring(event),sprint(...)) end
 	local function walk_event(evl,emitter,event,...)
 		local copy={}
 		for obj,val in pairs(evl) do
 			copy[obj]=val
 		end
 		for obj,val in pairs(copy) do
+			-- if d then print(obj) end
 			obj:handle(emitter,event,...)
 		end
 	end
@@ -170,8 +172,8 @@ end
 --or {[emt1]={ev1,ev2,...},...},timeout
 --timeout is optional and one use only
 local function get_args(...)
-	local nargs=select('#',...)
 	local args={...}
+	local nargs=#args
 	local t,timeout
 	if type(args[nargs])=='number' then
 		timeout=args[nargs]
@@ -179,7 +181,7 @@ local function get_args(...)
 	end
 	if nargs~=0 then
 		if nargs==1 then
-			t=...
+			t=args[1]
 		else
 			t={[args[1]]={unpack(args,2,nargs)}}
 		end
@@ -265,12 +267,9 @@ end
 
 Obj.finalize = function(obj)
 	--handle subs
-	local del
-	for sub in next,obj.subs,del do
-		if del then del:kill() end --may trigger actions
-		del=sub
+	while next(obj.subs) do
+		next(obj.subs):kill()
 	end
-	if del then del:kill() end
 	
 	obj.parent.subs[obj]=nil
 	
@@ -290,6 +289,7 @@ end
 --Obj.setSub = function(obj,sub) dangerous
 
 Obj.setParent=function(obj,parent)
+	if parent==obj then error("A scheduler object cannot be it's own parent",2) end
 	obj.parent.subs[obj]=nil
 	parent=parent or scheduler
 	obj.parent=parent
@@ -298,21 +298,29 @@ Obj.setParent=function(obj,parent)
 end
 
 Obj.setTimeout=function(obj,timeout)
+	if type(timeout)~='number' then
+		error('timeout must be number',2)
+	else
+		timeout=Timer.norm(timeout)
+	end
 	obj.timeout=timeout
 	obj.td={timer={timeout+os_time()}}
 	obj:link(obj.td)
+	return obj
 end
 
 Obj.resetTimeout=function(obj)
 	obj:unlink(obj.td)
 	obj.td.timer[1]=os_time()+obj.timeout
 	obj:link(obj.td)
+	return obj
 end
 
 Obj.cancelTimeout=function(obj)
 	obj.timeout=nil
 	obj:unlink(obj.td)
 	obj.td=nil
+	return obj
 end
 
 
@@ -541,7 +549,7 @@ Task.step = function()
         log('sched', 'DETAIL', "Resuming %s", tostring (task))
 		running = task
 		Task.running=task
-        local success, msg,target = coroutine.resume (co,unpack(task.args))
+        local success, msg = coroutine.resume (co,unpack(task.args))
 		Task.running=nil
 		running = scheduler
         task.args={}
@@ -642,7 +650,9 @@ Wait=Wait,
 
 Sync=Sync,
 once=Sync.once,
+sigonce=Sync.once,
 on=Sync.on,
+sighook=Sync.on,
 
 Task=Task,
 task=Task.new,
@@ -690,12 +700,9 @@ function sched.reset()
 		log('sched', 'INFO', "killing %s from %s", tostring(obj),tostring(running))
 		signal(obj,'dying',running) --warns subs
 		signal(obj.parent,'dying_sub',obj,'killed_by',running)
-		local del
-		for sub in next,obj.subs,del do
-			if del then del:kill() end --may trigger actions
-			del=sub
+		while next(obj.subs) do
+			next(obj.subs):kill()
 		end
-		if del then del:kill() end
 		obj.subs={}
 		obj.status='dead'
 		signal(obj,'dead',running)

@@ -2,11 +2,12 @@
 
 local log=require 'packages.log'
 local sprint=require'utils.print'.sprint
-local sched,pairs,string,term,_G,fs,os,print,unpack,select,pprint=sched,pairs,string,term,_G,fs,os,print,unpack,select,pprint
+local sched,pairs,string,term,_G,fs,os,print,unpack,select,pprint,next=sched,pairs,string,term,_G,fs,os,print,unpack,select,pprint,next
+local coroutine=coroutine
 local tostring,math=tostring,math
 PACKAGE_NAME='sched'
 
-local os_pullEventRaw=os.pullEventRaw
+
 local sched=sched
 local fil
 local link_r
@@ -176,6 +177,15 @@ for t,tf in pairs(new) do
 		end
 	end
 end
+replace=function(env,t)
+	t=t or all
+	for i,v in pairs(t[_G]) do
+		rawset(_G,i,v)
+	end
+	for i,v in pairs(t[os]) do
+		os[i]=v
+	end
+end
 
 
 local time=os.clock
@@ -183,7 +193,7 @@ env.time = time
 local WAIT_TOKEN=tostring({})
 local last_yield=-1
 local Task=sched.Task
--- local a=0
+local yield=coroutine.yield
 -- local ta
 function step(timeout,nd)
 	-- tprint(sched.fil,3)
@@ -211,7 +221,7 @@ function step(timeout,nd)
 			local x
 			local plat=fil.platform
 			repeat
-				x={os_pullEventRaw()}
+				x={yield()}
 				if x[2]==id then
 					last_yield=time()
 					break
@@ -223,7 +233,7 @@ function step(timeout,nd)
 			return
 		else
 			repeat
-			until id == select(2,os_pullEventRaw('timer'))
+			until id == select(2,yield('timer'))
 			last_yield=time()
 			return
 		end
@@ -235,7 +245,11 @@ function step(timeout,nd)
 			sched.stop()
 			return
 		end
-		sched.signal('platform',os_pullEventRaw())
+		local filter
+		if not next(fil.platform,next(fil.platform)) then
+			filter=next(fil.platform)
+		end
+		sched.signal('platform',yield(filter))
 		last_yield=time()
 		return
 	end

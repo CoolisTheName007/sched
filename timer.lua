@@ -41,9 +41,9 @@ setmetatable(env,nil)
 
 local function norm(t) --the CC clock moves in steps of 0.05
 	t=t-t%0.05
-	if t<=0 then
-		error('time values must be non-negative and multiples of 0.05',3)--to be used internally inside Timer functions
-	end
+	-- if t<=0 then
+		-- error('time values must be non-negative and multiples of 0.05',3)--to be used internally inside Timer functions
+	-- end
 	return t
 end
 
@@ -144,9 +144,9 @@ local meta={
 			error(tostring(k)..'timer events must be numbers',2)
 		end
 		-- k=k-k%0.05 --math.ceil(t/0.05)*0.05 --maybe round up for user comfort? this way it's 1.5 time faster
-		if k<=0 then
-			error(k..'time values must be positive',2) 
-		end
+		-- if k<=0 then
+			-- error(k..'time values must be positive',2) 
+		-- end
 		if v==nil then
 			Timer.remove(k)
 		else--could move it here...
