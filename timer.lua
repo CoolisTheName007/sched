@@ -75,6 +75,8 @@ Timer.add = function(t)
 				break
 			end
 		end
+		print(ind)
+		if ind==nil then sched.ready=true end--if the next due date changed, signal the platform to break it's step
 		link:insert_r(t,ind)
 	end
 end

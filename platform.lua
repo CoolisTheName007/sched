@@ -1,7 +1,6 @@
 --more efficient versions of read, sleep, (turtle?) will be included in better API's
 
 local log=require 'packages.log'
-local sprint=require'utils.print'.sprint
 local sched,pairs,string,term,_G,fs,os,print,unpack,select,pprint,next=sched,pairs,string,term,_G,fs,os,print,unpack,select,pprint,next
 local coroutine=coroutine
 local tostring,math=tostring,math
@@ -191,24 +190,32 @@ end
 local time=os.clock
 env.time = time
 local WAIT_TOKEN=tostring({})
-local last_yield=-1
 local Task=sched.Task
-local yield=coroutine.yield
--- local ta
+local cc,CC,last_yield,last_return,load=0,1,-1,1,0
+
+debug=function()
+	return cc,CC,last_yield,last_return,load
+end
+
+local yield=function(...)
+	last_yield=time()
+	cc=last_yield-last_return
+	local x={coroutine.yield(...)}
+	last_return=time()
+	CC=last_return-last_yield
+	load=cc/(CC+cc)
+	return x
+end
+
+
+
 function step(timeout,nd)
-	-- tprint(sched.fil,3)
-	-- print(Task.ready)
-	-- read()
-	local tr=Task.ready.r
-	if tr[0]~=-1 then timeout=0 end
+	if sched.ready then timeout=0 end
+	sched.ready=false
 	if timeout then
 		local id
 		if timeout==0 then
-			-- t=time()
-			-- if t~=ta then print(t) ta=t end
-			if time()-last_yield>=0.05 then --retain control for at most (as far as the scheduler can control) one tick if necessary; set to math.huge in case there is too much of a delay between computers;
-				-- a=a+1
-				-- print(a,':',last_yield,':',t)
+			if time()-last_return>=0.05 then --retain control for at most (as far as the scheduler can control) one tick if necessary; set to math.huge in case there is too much of a delay between computers;
 				os.queueEvent('timer',WAIT_TOKEN)
 				id=WAIT_TOKEN
 			else
@@ -221,27 +228,23 @@ function step(timeout,nd)
 			local x
 			local plat=fil.platform
 			repeat
-				x={yield()}
-				if x[2]==id then
-					last_yield=time()
+				x=yield()
+				if x[1]=='timer' and x[2]==id then
 					break
 				else
 					sched.signal('platform',unpack(x))
-					if (not fil.platform) or tr[0]~=-1 or link_r[0]~=nd then last_yield=time() break end
+					if sched.ready then break end
 				end
 			until false
 			return
 		else
 			repeat
-			until id == select(2,yield('timer'))
-			last_yield=time()
+			until id == yield('timer')[2]
 			return
 		end
 	else
 		if not fil.platform then
-			if next(fil) then
-				log('platform','WARNING','listeners left un-triggered, no timers or platform listeners, so exiting.')
-			end
+			log('platform','INFO','no timers or platform listeners, so exiting.')
 			sched.stop()
 			return
 		end
@@ -249,14 +252,9 @@ function step(timeout,nd)
 		if not next(fil.platform,next(fil.platform)) then
 			filter=next(fil.platform)
 		end
-		sched.signal('platform',yield(filter))
-		last_yield=time()
+		sched.signal('platform',unpack(yield(filter)))
 		return
 	end
-end
-
-function _last_yield() --for debug
-	return last_yield
 end
 
 function _reset()

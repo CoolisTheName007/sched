@@ -14,7 +14,6 @@
 
 local log = require 'packages.log'
 local check=require'packages.checker'.check
-local sprint=require'utils.print'.sprint
 
 local sched=sched
 
