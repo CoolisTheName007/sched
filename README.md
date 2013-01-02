@@ -17,7 +17,7 @@ the loadreq API must be loaded first, before using the scheduler. It attempts to
 + log: https://github.com/CoolisTheName007/log
 + checker: https://github.com/CoolisTheName007/checker
 
--From the utils repository, to be put in /utils:
+-From the utils repository (in my github), to be put in /utils:
 
 + print
 + table
