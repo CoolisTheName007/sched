@@ -9,6 +9,8 @@ In /packages/sched: put init.lua, platform.lua and timer.lua.
 You may optionally include other modules from the scheduler repository.
 
 ####Dependencies:
+the loadreq API must be loaded first, before using the scheduler. It attempts to make loadreq.require a global (require)
+
 -To be put in /packages:
 
 + loadreq: https://github.com/CoolisTheName007/loadreq
