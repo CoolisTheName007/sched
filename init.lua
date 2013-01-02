@@ -244,6 +244,7 @@ function O:setTimeout(timeout)
 	else
 		timeout=Timer.norm(timeout)
 	end
+	self:cancelTimeout()
 	self[TIMEOUT_TOKEN]={
 	timeout=timeout,
 	td={timer={timeout+os_time()}},
