@@ -4,6 +4,7 @@ local tnil	=require'utils.table'.tnil
 local checker=require'packages.checker'
 local check,conform=checker.check,checker.conform
 local mtostring =require'utils.print'.mtostring
+local tprint=tprint
 local linked=require 'utils.linked'
 local table=table
 local pairs=pairs
@@ -19,7 +20,6 @@ local weak={__mode='kv'}
 local weak_key={__mode='k'}
 
 local scheduler
-local running
 
 local fil
 --[[
@@ -95,12 +95,30 @@ Obj.new = function (name)
 	local self=setmetatable({
 		fil={},
 		subs={},
-		parent=running,
+		parent=sched.running,
 	},O_meta)
-	self.name=(name or tostring(self):match(':.(.*)'))
-	
-	running.subs[self]=true
+	self.name=(name or tostring(self.fil):match(':.(.*)'))
+	sched.running.subs[self]=true
 	return self
+end
+
+function Obj.step()
+    local ptr = Obj.ready
+	Obj.ready=linked.new()
+    --------------------------------------------------------------------
+    -- going through `Obj.ready` until it's empty.
+    --------------------------------------------------------------------
+    while true do
+	
+		local obj = ptr:remove() --pops first from left->right
+		if obj==nil then break end
+		
+		obj:resume()
+    end
+end
+
+Obj._reset=function()
+	Obj.ready=linked.new()
 end
 
 ---Takes a link descriptor and tranforms them into a a proper link table for Obj methods to consume
@@ -138,7 +156,7 @@ local add_timer=function(t,nd)
 end
 
 ---Registers @obj in the waiting table @fil in the waiting sets described by the link table @t
-function O :link(t)
+function O:link(t)
 	local ofil=self.fil
 	local fil_tev,ofil_tev,fil_tobj
 	for em,tev in pairs(t) do
@@ -203,9 +221,17 @@ function O:reset()
 	return self
 end
 
+local ending={n=0}
+
 --helper
 ---Kills @obj 's subs and removes it from the waiting sets.
 function O:finalize()
+	if ending[self] then
+		error('Detected recursion in Obj.finalize: ending stack='..stringify(ending,nil,nil,nil,nil,1),2)
+	else
+		ending.n=ending.n+1
+		ending[self]=ending.n
+	end
 	--handle subs
 	while next(self.subs) do
 		next(self.subs):kill()
@@ -213,8 +239,14 @@ function O:finalize()
 	
 	self.parent.subs[self]=nil
 	
-	--remove the self from the waiting sets
+	--remove self from the waiting sets
 	self:reset()
+	
+	--remove self from the action queue
+	Obj.ready:remove(self)
+	
+	ending[self]=nil
+	ending.n=ending.n-1
 	return self
 end
 
@@ -320,33 +352,17 @@ end
 ---Schedules the @call for execution with arguments (...)
 --Won't pass nil arguments, e.g. (1,nil,3) is the same as (1)
 function C:handle(...)
-	check('call',self)
 	self.args={...}
-	Call.ready:insert_r(self)
+	Obj.ready:insert_r(self)
 	sched.ready=true
 	return self
 end
 
----Runs all the ready calls
-Call.step=function()
-	local ptr = Call.ready
-	Call.ready=linked.new()
-    --------------------------------------------------------------------
-    -- Go through `Call.ready` until it's empty.
-    --------------------------------------------------------------------
-    while true do
-		local call = ptr:remove() --pops first from left->right
-		if call==nil then break end
-		
-        log('sched', 'DETAIL', "Resuming %s", tostring (call))
-		running = call
-        call.f(unpack(task.args))
-		running = scheduler
-    end
-end
-
-Call._reset=function()
-	Call.ready=linked.new()
+function C:resume()
+	local running=sched.running
+	sched.running= self
+	self.f(unpack(self.args))
+	sched.running = running
 end
 
 
@@ -366,10 +382,12 @@ __type='sync'
 }
 
 local sync_once_handle = function(sync,...)
-	running=obj
+	local running=sched.running
+	sched.running= sync
 	sync.f(...)
-	running=scheduler
-	sync:reset()
+	sync:kill()
+	self.f(unpack(self.args))
+	sched.running = running
 end
 
 Sync.once = function (...)
@@ -389,14 +407,15 @@ Sync.once = function (...)
 end
 
 local sync_on_handle=function(obj,...)
-	running=obj
+	local running=sched.running
+	sched.running= obj
 	if obj.timeout then
 		obj.f(...)
 		obj:resetTimeout()
 	else
 		obj.f(...)
 	end
-	running=scheduler
+	sched.running=running
 end
 
 Sync.on = function (...)
@@ -447,19 +466,18 @@ Task.new = function (...)
 	
 	task.co=coroutine.create( f )
 	task.args={}
-	log('sched', 'INFO', 'Task.new created %s from %s with initial args %s by %s', tostring(task), tostring(f),args and mtostring(unpack(args)) or '(no args)',tostring(running))
+	log('sched', 'INFO', 'Task.new created %s from %s with initial args %s by %s', tostring(task), tostring(f),args and mtostring(unpack(args)) or '(no args)',tostring(sched.running))
 	return task
 end
 
 ---Schedules a task for execution with args (...)
 --If T:handle is called several times before resuming the task, task.args will be overwritten and the last args set will be the last ones. 
 function T:handle(...)
-	check('task',self)
 	self.args={...} --no point in catching args after nil, since self.args is unpacked before returning to the task.
-	Task.ready:insert_r(self)
+	Obj.ready:insert_r(self)
 	sched.ready=true
 	
-	log('sched', 'DETAIL', 'Task.handle rescheduling %s to receive SIGNAL %s.%s.%s',
+	log('sched', 'DETAIL', 'Task:handle rescheduling %s to receive SIGNAL %s.%s.%s',
 	tostring(self),tostring(...),tostring(select(2,...)),mtostring(select(3,...)))
 	return self
 end
@@ -471,7 +489,7 @@ end
 function T:run(...)
 	check('task',self)
 	self.args={...}
-	Task.ready:insert_r(self)
+	Obj.ready:insert_r(self)
     log('sched', 'INFO', "Task.run scheduling %s", tostring(self))
 	return self
 end
@@ -482,10 +500,9 @@ end
 function T:kill()
 	check('task',self)
 	if self.status~='dead' then
-		log('sched', 'INFO', "Task.kill killing %s from %s", tostring(self),tostring(running))
+		log('sched', 'INFO', "Task.kill killing %s from %s", tostring(self),tostring(sched.running))
 		signal(self,'dying')
 		self:finalize()
-		Task.ready:remove(self)
 		self.status='dead'
 		signal(self,'dead')
 		if Task.running and Task.running.status=='dead' and Task.running.co==coroutine.running() then
@@ -493,6 +510,31 @@ function T:kill()
 		end
 	end
 	return self
+end
+
+function T:resume()
+	sched.running = self
+	
+	local co=self.co
+	Task.running=self
+	
+	log('sched', 'DETAIL', "Resuming %s", tostring (obj))
+	local success, msg = coroutine.resume (co,unpack(self.args))
+	Task.running=nil
+	self.args={}
+	sched.running = scheduler
+	if not success then
+		-- report the error msg
+		log('sched', 'ERROR', "In %s:%s", tostring (self),tostring(msg))
+		signal(self, "error",success, msg)
+		--preserve events/subs for error catchers to analize, and then finalize
+		self:finalize()
+	elseif coroutine.status (co) == "dead" then --If the coroutine died, signal it for those who synchronize on its termination.
+		log('sched', 'INFO', "%s is dead", tostring (task))
+		signal(Obj, "dying", success, msg)
+		self:finalize() --kills subs and cleans up filters, and takes out of the Obj.ready listxz
+		signal(self, "dead", success, msg)
+	end
 end
 
 
@@ -505,11 +547,11 @@ end
 -- @return  emitter, event, parameters
 function Task.wait(...)
 	local nd
-	local task = running
+	local task = sched.running
 	if task.co~=coroutine.running() then error('calling Task.wait outside a task/inside a task but inside another coroutine',2) end
 	if ...==nil then
 		log('sched', 'DETAIL', "Task.wait rescheduling %s for resuming ASAP", tostring(task))
-		Task.ready:insert_r(task)
+		Obj.ready:insert_r(task)
 	elseif ... then
 		log('sched', 'DETAIL', "%s waiting with args %s", tostring(task),mtostring(...))
 		local t,timeout=get_args(...)
@@ -526,49 +568,12 @@ function Task.wait(...)
 	return unpack(task.args)
 end
 
----This function runs the coroutines of all tasks in Task.ready,
--- i.e. that received a signal/yielded
-function Task.step()
-    local ptr = Task.ready
-	Task.ready=linked.new()
-    --------------------------------------------------------------------
-    -- If there are no task currently running, resume scheduling by
-    -- going through `Task.ready` until it's empty.
-    --------------------------------------------------------------------
-    while true do
-	
-		local task = ptr:remove() --pops first from left->right
-		if task==nil then break end
-		
-		local co=task.co
-		
-        log('sched', 'DETAIL', "Resuming %s", tostring (task))
-		running = task
-		Task.running=task
-        local success, msg = coroutine.resume (co,unpack(task.args))
-		Task.running=nil
-		running = scheduler
-        task.args={}
-		if not success then
-            -- report the error msg
-            log('sched', 'ERROR', "In %s:%s", tostring (task),tostring(msg))
-			signal(task, "error",success, msg)
-			--preserve events/subs for error catchers to analize, and then finalize
-			task:finalize()
-		elseif coroutine.status (co) == "dead" then --If the coroutine died, signal it for those who synchronize on its termination.
-			log('sched', 'INFO', "%s is dead", tostring (task))
-			signal(task, "dying", success, msg)
-			task:finalize() --kills subs and cleans up filters 
-			Task.ready:remove(task)
-			signal(task, "dead", success, msg)
-		end
-    end
-end
+
+
 
 ---resets the Task class vars
 function Task._reset()
 	Task.running=nil
-	Task.ready=linked.new()
 end
 
 local Wait={} --some optimizations
@@ -578,8 +583,8 @@ local Wait={} --some optimizations
 Wait.loop = function (f,...)
 	check('function',f)
 	local t,timeout=get_args(...)
-	check('task',running)
-	local task=running
+	check('task',sched.running)
+	local task=sched.running
 	local t=t or {}
 	task:link(t)
 	if timeout then 
@@ -678,7 +683,7 @@ emit=function(...)
 end,
 Obj=Obj,
 ready=false,
-me=function() return running end,
+me=function() return sched.running end,
 
 
 Task=Task,
@@ -687,7 +692,7 @@ Call=Call,
 Wait=Wait,
 
 sigonce=Sync.once,
-sighook=Sync.sigon,
+sighook=Sync.on,
 
 task=Task.new,
 wait=Task.wait,
@@ -704,7 +709,7 @@ signal=signal,
 emit=sched.emit,
 
 sigonce=Sync.once,
-sighook=Sync.sigon,
+sighook=Sync.on,
 
 task=Task.new,
 wait=Task.wait,
@@ -744,17 +749,21 @@ function sched.reset()
 	subs={},
 	name='scheduler',
 	kill=function(obj)
-		log('sched', 'INFO', "killing %s from %s", tostring(obj),tostring(running))
-		signal(obj,'dying',running) --warns subs
+		log('sched', 'INFO', "killing %s from %s", tostring(obj),tostring(sched.running))
+		if sched.running~=scheduler then
+			error('killing scheduler from'..tostring(sched.running)..', use sched.stop() instead',2)
+		end
+		signal(obj,'dying',sched.running) --warns subs
 		while next(obj.subs) do
 			next(obj.subs):kill()
 		end
 		obj.subs={}
 		obj.status='dead'
-		signal(obj,'dead',running)
+		signal(obj,'dead',sched.running)
 		if Task.running and Task.running.status=='dead' and Task.running.co==coroutine.running() then
 			coroutine.yield()
 		end
+		sched.ready=true
 		return obj
 	end
 	},{
@@ -762,11 +771,12 @@ function sched.reset()
 	})
 	
 	sched.scheduler=scheduler
-	running=scheduler
+	sched.running=scheduler
 	
-	Timer._reset()
+	Obj._reset()
 	Task._reset()
-	Call._reset()
+	Timer._reset()
+	
 	
 	platform._reset() --after Timer
 	loop_state = 'stopped'
@@ -780,14 +790,14 @@ function sched.loop ()
 	log('sched','INFO','Scheduler started')
     loop_state = 'running'
 	local Task=Task
-    local Timer_nextevent, Timer_step, Task_step,Call_step, platform_step =
-        Timer.nextevent, Timer.step, Task.step, Call.step, platform.step
+    local Timer_nextevent, Timer_step, Obj_step, platform_step =
+        Timer.nextevent, Timer.step, Obj.step, platform.step
 	local timeout
     while true do --this block is the scheduler step
         Timer_step() -- Emit timer signals
-        Task_step() -- Run all the ready tasks
-		Call_step() -- Call all ready calls
+        Obj_step() -- Run all the ready tasks
 		-- tprint(sched.fil,3)
+		-- read()
 		-- Find out when the next timer event is due
         timeout = nil
 		local date = Timer_nextevent()
